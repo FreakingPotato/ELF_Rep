@@ -1,290 +1,209 @@
-# ELF: Embedded Language Flows
+# ELF-Rep: ELF for DNA Sequence Generation
 
-[![arXiv](https://img.shields.io/badge/arXiv-2605.10938-b31b1b.svg)](https://arxiv.org/abs/2605.10938)&nbsp;
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)&nbsp;
-[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-ELF-blue.svg)](https://huggingface.co/embedded-language-flows)&nbsp;
+> 基于 [ELF (Embedded Language Flows)](https://arxiv.org/abs/2605.10938) 的 DNA 序列生成复现与扩展。将 ELF flow-matching 框架从自然语言迁移到基因组序列生成，使用 NucEL 预训练编码器将 DNA token 映射到连续 embedding 空间进行扩散建模。
 
-This is the official JAX implementation for the paper *ELF: Embedded Language Flows*. This code is written and tested on TPUs. A PyTorch version will be released soon.
+[![arXiv](https://img.shields.io/badge/ELF-arXiv%202605.10938-b31b1b.svg)](https://arxiv.org/abs/2605.10938)
+[![NucEL](https://img.shields.io/badge/Encoder-NucEL-blue.svg)](https://huggingface.co/FreakingPotato/NucEL)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-ELF is a class of continuous diffusion language models based on continuous-time Flow Matching. Unlike existing DLMs, ELF predominantly stays within the continuous embedding space until the final time step, where it maps to discrete tokens using a shared-weight network. This formulation makes it straightforward to adapt established techniques from image-domain diffusion models, e.g., classifier-free guidance (CFG).
+---
 
-<p align="center">
-  <img src="assets/teaser.gif" alt="Conceptual illustration of ELF" width="100%"/>
-</p>
-<p align="left">
-  <em><strong>Conceptual illustration of ELF.</strong> Orange points denote data represented in continuous embedding space, and purple lines show denoising trajectories from Gaussian noise to clean embeddings. Discretization is applied only at the final time step (t=1) using a shared-weight network.</em>
-</p>
+## 📋 Overview
 
-<p align="center">
-  <img src="assets/generation.gif" alt="Denoising trajectory of ELF-B" width="100%"/>
-</p>
-<p align="left">
-  <em><strong>Denoising trajectory</strong> of ELF-B. As t increases from 0 to 1, ungrammatical sentences are progressively refined into fluent and grammatical text.</em>
-</p>
+本项目将 ELF（连续 embedding 空间的 flow-matching 扩散模型）应用于 **hg38 人类基因组 DNA 序列生成**：
 
-<p align="center">
-  <img src="assets/sys_compare.jpg" alt="System-level comparison" width="100%"/>
-</p>
-<p align="left">
-  <em><strong>System-level comparison.</strong> ELF-B outperforms both discrete and continuous DLMs trained under similar settings (a) and distilled variants of other baselines that require additional rounds of training (b), and uses substantially fewer training tokens (c).</em>
-</p>
+- **编码器**: NucEL（预训练 DNA 语言模型，512 维 embedding）
+- **架构**: ELF-B（12 层 Transformer，86.7M 参数）
+- **训练数据**: hg38 基因组，1024bp 窗口，预计算 NucEL embeddings
+- **训练**: 10 epochs，48,870 steps，~30h (2×RTX 3090)
+- **采样**: Euler ODE solver，50 步
 
-## Initialization
+## 🧬 Evaluation Results
 
-Install the dependencies (JAX+TPUs) and log in to WandB to track your experiments if needed.
+详细报告见 [EVALUATION_REPORT.md](EVALUATION_REPORT.md) 或 [EVALUATION_REPORT.html](EVALUATION_REPORT.html)。
+
+| Metric | ELF-B | Random Baseline | 判断 |
+|--------|-------|-----------------|------|
+| **S-FID** | **8.25** | — | ✅ |
+| **Motif Pearson r** | **0.921** | — | ✅ 强相关 |
+| **GC Wasserstein** | **0.023** | 0.102 | ✅ 4.5× 优于 random |
+| **3-mer cosine** | **0.947** | 0.872 | ✅ |
+| **4-mer cosine** | **0.904** | 0.822 | ✅ |
+| **5-mer cosine** | **0.848** | 0.770 | ✅ |
+| **Dinucleotide cosine** | **0.974** | — | ✅ |
+| **Diversity (Hamming)** | **0.737** | 0.740 (real) | ✅ ≈ real |
+| **Unique ratio** | **100%** | — | ✅ |
+| **Novelty (20-mer)** | **99.9%** | — | ✅ |
+
+### Denoising Steps 分析
+
+| Steps | GC Wasserstein ↓ | 3-mer Cosine ↑ | Time |
+|-------|-------------------|-----------------|------|
+| 5 | 0.057 | 0.922 | 7s |
+| 10 | 0.040 | 0.940 | 19s |
+| 25 | 0.029 | 0.938 | 29s |
+| **50** | **0.022** | **0.946** | **49s** |
+| 100 | 0.010 | 0.935 | 94s |
+
+---
+
+## 🚀 Quick Start
+
+### 安装
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-wandb login YOUR_WANDB_API_KEY
+# JAX with CUDA:
+pip install "jax[cuda12]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 ```
 
-## Inference
+### 数据预处理
 
-You can quickly verify your setup with our provided checkpoint.
+将 hg38 基因组序列转为 NucEL embeddings：
 
-<table><tbody>
-<td valign="bottom">OpenWebText (unconditional)</td>
-<td valign="bottom" align="center">ELF-B (105M)</td>
-<td valign="bottom" align="center">ELF-M (342M)</td>
-<td valign="bottom" align="center">ELF-L (652M)</td>
-<tr><td align="left">pre-trained checkpoint</td>
-<td align="center"><a href="https://huggingface.co/embedded-language-flows/ELF-B-owt">ELF-B-owt</a></td>
-<td align="center"><a href="https://huggingface.co/embedded-language-flows/ELF-M-owt">ELF-M-owt</a></td>
-<td align="center"><a href="https://huggingface.co/embedded-language-flows/ELF-L-owt">ELF-L-owt</a></td>
-</tr>
-<tr><td align="left">Sampling steps (SDE)</td>
-<td align="center">32</td>
-<td align="center">64</td>
-<td align="center">64</td>
-</tr>
-<tr><td align="left">Gen. PPL ↓ (paper)</td>
-<td align="center">24.1</td>
-<td align="center">21.7</td>
-<td align="center">23.3</td>
-</tr>
-<tr><td align="left">Entropy ↑ (paper)</td>
-<td align="center">5.15</td>
-<td align="center">5.18</td>
-<td align="center">5.28</td>
-</tr>
-</tbody></table>
+```bash
+python scripts/preprocess_nucel_embeddings.py \
+  --fasta_path data/hg38.fa \
+  --seq_len 1024 \
+  --output_dir data/nucel_data/
+```
 
-<table><tbody>
-<td valign="bottom">Conditional generation (ELF-B)</td>
-<td valign="bottom" align="center">WMT14 De-En</td>
-<td valign="bottom" align="center" colspan="3">XSum</td>
-<tr><td align="left">pre-trained checkpoint</td>
-<td align="center"><a href="https://huggingface.co/embedded-language-flows/ELF-B-de-en">ELF-B-de-en</a></td>
-<td align="center" colspan="3"><a href="https://huggingface.co/embedded-language-flows/ELF-B-xsum">ELF-B-xsum</a></td>
-</tr>
-<tr><td align="left">Metric</td>
-<td align="center">BLEU ↑</td>
-<td align="center">ROUGE-1 ↑</td>
-<td align="center">ROUGE-2 ↑</td>
-<td align="center">ROUGE-L ↑</td>
-</tr>
-<tr><td align="left">Score (paper)</td>
-<td align="center">26.4</td>
-<td align="center">36.0</td>
-<td align="center">12.2</td>
-<td align="center">27.8</td>
-</tr>
-</tbody></table>
+输出：
+- `train_1024.bin` — uint16 token IDs
+- `train_1024_embeddings.bin` — float32 NucEL embeddings
+- `train_1024_meta.json` — latent mean/std 统计
 
-Slight differences in metrics may arise from different compute setups. Our results were computed on TPU v5p-64.
+### 训练
 
-#### Sanity Check
-
-1. **Get the checkpoint.** All pre-trained checkpoints are on HuggingFace under [`embedded-language-flows`](https://huggingface.co/embedded-language-flows) and are pulled automatically via `--checkpoint_path <hf-repo-id>` — no manual download needed. To use a locally trained checkpoint, pass the path to the specific checkpoint file, e.g. `--checkpoint_path outputs/elf_b-owt/checkpoint_19000`.
-
-2. **(Optional) Tweak the config.** The provided `configs/training_configs/train_owt_ELF-{B,M,L}.yml` already point at the correct HuggingFace data + T5 encoder, so they run as-is. You may want to edit:
-    - `output_dir` — where samples and logs are written
-    - `wandb_entity` — set to your entity, or set `use_wandb: false` to disable
-    - `sampling_configs_path` — defaults to `configs/sampling_configs/uncond_sampling_configs.yml` (32-step SDE + 64-step SDE, both with self-conditioning CFG); swap for your preferred schedule if needed
-
-3. **Launch evaluation.**
-
-**Unconditional generation:**
 ```bash
 cd src/
-
-  # ELF-B (105M)
-  python eval.py \
-      --config configs/training_configs/train_owt_ELF-B.yml \
-      --checkpoint_path embedded-language-flows/ELF-B-owt
-
-  # ELF-M (342M) — smaller batch to fit the bigger model
-  python eval.py \
-      --config configs/training_configs/train_owt_ELF-M.yml \
-      --checkpoint_path embedded-language-flows/ELF-M-owt \
-      --config_override global_batch_size=64
-
-  # ELF-L (652M)
-  python eval.py \
-      --config configs/training_configs/train_owt_ELF-L.yml \
-      --checkpoint_path embedded-language-flows/ELF-L-owt \
-      --config_override global_batch_size=64
+python train_nucel.py \
+  --config configs/training_configs/train_hg38_nucel_ELF-B.yml
 ```
-The evaluator generates 1,000 samples and reports Gen. PPL (under a pretrained GPT-2 Large) and unigram entropy. Expected: Gen. PPL ≈ 24 and entropy ≈ 5.15 for ELF-B at 32 SDE steps.
 
-**Conditional generation:**
+配置文件位于 `configs/training_configs/train_hg38_nucel_ELF-B.yml`。
+
+### 采样
+
 ```bash
-cd src/
-
-# XSum (summarization)
-python eval.py \
-    --config configs/training_configs/train_xsum_ELF-B.yml \
-    --checkpoint_path embedded-language-flows/ELF-B-xsum
-
-# WMT14 De-En (translation)
-python eval.py \
-    --config configs/training_configs/train_de-en_ELF-B.yml \
-    --checkpoint_path embedded-language-flows/ELF-B-de-en
+python src/sample_nucel.py \
+  --checkpoint outputs/elf-b-hg38-nucel/checkpoint_48870 \
+  --config configs/training_configs/train_hg38_nucel_ELF-B.yml \
+  --n_samples 10000 --sampling_steps 50 --batch_size 8 \
+  --output results/generated/
 ```
-The evaluator runs on each task's **validation** set and reports BLEU for WMT14 De-En and ROUGE-1/2/L for XSum. Expected: BLEU ≈ 26.7 on De-En; ROUGE-1/2/L ≈ 36.3 / 12.5 / 28.1 on XSum. Note that the paper numbers are computed on the **test** sets, so validation scores here may differ slightly.
 
-## Data Preparation
+### 评估
 
-Three task settings: unconditional generation on **OpenWebText**, machine translation on **WMT14 De-En**, and summarization on **XSum**. All use a frozen T5 encoder for text-to-embedding mapping.
+```bash
+# 基础指标 + 图表
+python src/evaluate_generated.py \
+  --generated results/generated/generated_sequences.txt \
+  --real_data /path/to/train_1024.bin \
+  --output results/evaluation/
 
-#### Pre-tokenized splits
+# S-FID + t-SNE（需要 GPU + transformers）
+python src/eval_sfid_tsne.py --output results/evaluation/
 
-We provide pre-tokenized splits (T5 tokenizer) and the JAX T5-small encoder on HuggingFace under [`embedded-language-flows`](https://huggingface.co/embedded-language-flows). They are loaded directly via `datasets.load_dataset` — no manual download needed. Defaults wired into the configs:
+# Denoising steps 曲线
+CUDA_VISIBLE_DEVICES=0 python src/eval_denoising_curve.py \
+  --checkpoint outputs/elf-b-hg38-nucel/checkpoint_48870 \
+  --config configs/training_configs/train_hg38_nucel_ELF-B.yml \
+  --output results/evaluation/figures
+```
 
-| Task | `data_path` / `eval_data_path` |
-| --- | --- |
-| OpenWebText | `embedded-language-flows/openwebtext-t5` |
-| WMT14 De-En | `embedded-language-flows/wmt14_de-en_{train,validation}_t5` |
-| XSum | `embedded-language-flows/xsum_{train,validation}_t5` |
-| T5 encoder | `embedded-language-flows/t5_small_encoder_jax/t5_small_encoder_jax.pkl` |
+---
 
-To use a local copy, point `data_path` at a directory saved with `datasets.save_to_disk` — the loader falls back to `load_from_disk`.
+## 📁 Project Structure
 
-#### Prepare your own data
+```
+ELF/
+├── configs/
+│   └── training_configs/
+│       ├── train_hg38_nucel_ELF-B.yml   # DNA 生成训练配置
+│       └── ...                           # 原始 ELF 文本任务配置
+├── src/
+│   ├── train_nucel.py                   # DNA 训练入口
+│   ├── train_step_precomputed.py         # 训练 step（预计算 embedding）
+│   ├── sample_nucel.py                  # DNA 序列采样
+│   ├── evaluate_generated.py            # 评估 pipeline
+│   ├── eval_sfid_tsne.py               # S-FID + t-SNE 计算
+│   ├── eval_denoising_curve.py          # Denoising steps 曲线
+│   ├── run_evaluation.py                # 完整评估 runner
+│   ├── evaluate/
+│   │   ├── metrics.py                   # 评估指标实现
+│   │   └── visualize.py                 # 可视化生成
+│   ├── utils/
+│   │   ├── embedding_data_utils.py      # Embedding 数据加载器
+│   │   ├── sampling_utils.py            # 采样工具函数
+│   │   ├── generation_utils.py          # 生成工具函数
+│   │   └── checkpoint_utils.py          # Checkpoint 加载
+│   ├── modules/
+│   │   ├── model.py                     # ELF/ELFBlock/TimestepEmbedder 等
+│   │   └── layers.py                    # Attention, SwiGLUFFN, BottleneckTextProj 等
+│   └── configs/
+│       └── config.py                    # Config dataclass
+├── scripts/
+│   └── preprocess_nucel_embeddings.py   # 数据预处理脚本
+├── EVALUATION_PLAN.md                   # 评估方案
+├── EVALUATION_REPORT.md                 # 评估报告 (Markdown)
+├── EVALUATION_REPORT.html               # 评估报告 (HTML)
+└── README.md                            # 本文件
+```
 
-To train on a custom dataset, pre-tokenize it with the tokenizer and save it as a HuggingFace `Dataset` (Arrow).
+---
 
-**Unconditional generation** (e.g., OWT): each example needs only `input_ids` — the token ids of the text to be generated.
+## 🔬 Technical Details
 
-**Conditional generation** (e.g., translation, summarization): each example needs both `input_ids` (target/output text) and `condition_input_ids` (source/input text, e.g., the German sentence or the article). The collator prepends `condition_input_ids` to `input_ids` and builds the appropriate attention masks automatically.
+### Architecture
 
-Minimal recipe:
+| Component | Detail |
+|-----------|--------|
+| Model | ELF-B: 12-layer Transformer |
+| Hidden size | 768 |
+| Attention heads | 12 |
+| Bottleneck dim | 32 |
+| Encoder | NucEL (frozen, hidden=512) |
+| Parameters | 86,683,163 (~86.7M) |
+
+### Flow Matching
+
+ELF 使用连续时间 flow matching（非 DDPM）：
+- **前向过程**: 数据 → 噪声，`x_t = (1-t) * x_0 + t * noise`
+- **反向过程**: 噪声 → 数据，Euler ODE solver
+- **Loss**: L2 回归预测 `v_t = (noise - x_0) / max(1-t, t_eps)`
+
+### Decoding
+
+NucEL 是 encoder-only 模型，没有 decoder。生成后通过 **cosine similarity 最近邻** 将 embedding 解码回 DNA token：
 
 ```python
-from datasets import Dataset
-from transformers import T5Tokenizer
-
-tok = T5Tokenizer.from_pretrained("google-t5/t5-small")
-
-# Unconditional
-def encode_uncond(ex):
-    return {"input_ids": tok(ex["text"], add_special_tokens=False)["input_ids"]}
-
-# Conditional (translation / summarization)
-def encode_cond(ex):
-    return {
-        "condition_input_ids": tok(ex["source"], add_special_tokens=False)["input_ids"],
-        "input_ids": tok(ex["target"], add_special_tokens=False)["input_ids"],
-    }
-
-ds = Dataset.from_list(my_examples).map(encode_uncond, remove_columns=...)  # or encode_cond
-ds.save_to_disk("/path/to/my_dataset")
+# 生成 embedding [B, L, 512] → 最近邻到 NucEL token embeddings [4, 512]
+# Token: 11=A, 12=C, 13=G, 14=T
+sims = emb_normalized @ token_emb_normalized.T  # [N, 4]
+token_ids = argmax(sims, axis=-1) + 11
 ```
 
-Then point your config at it:
+---
 
-```yaml
-data_path: /path/to/my_dataset
-eval_data_path: /path/to/my_eval_dataset   # optional
-```
+## 📊 Comparison with Published DNA Diffusion Models
 
-For evaluation-only JSONL inputs (raw text, tokenized at load time), see `load_jsonl_dataset` in [data_utils.py:110-130](src/utils/data_utils.py#L110-L130) — set `eval_data_path` to a `.jsonl` file with one `{"input": ..., "output": ...}` example per line.
+| Model | Method | S-FID | 4-mer cos | GC W-dist |
+|-------|--------|-------|-----------|-----------|
+| **ELF-B (ours)** | Flow-matching + NucEL | **8.25** | **0.904** | **0.023** |
+| DiscDiff | Latent diffusion | ~5-15 | ~0.90 | ~0.02 |
+| DNA-Diffusion | DDPM (one-hot) | N/A | ~0.85 | ~0.05 |
+| DDSM | Dirichlet discrete | N/A | ~0.88 | ~0.03 |
 
-## Training
+> 注：不同论文使用不同数据集，数值仅供参考。
 
-Run the following command to launch training:
+---
 
-```bash
-python train.py --config configs/training_configs/train_owt_ELF-B.yml
-```
+## 📝 Citation
 
-Available training configs:
-
-- `configs/training_configs/train_owt_ELF-B.yml` — unconditional generation on OpenWebText, ELF-B (default)
-- `configs/training_configs/train_owt_ELF-M.yml` — unconditional generation on OpenWebText, ELF-M
-- `configs/training_configs/train_owt_ELF-L.yml` — unconditional generation on OpenWebText, ELF-L
-- `configs/training_configs/train_de-en_ELF-B.yml` — WMT14 De-En machine translation
-- `configs/training_configs/train_xsum_ELF-B.yml` — XSum abstractive summarization
-
-Default ELF-B training uses Muon at blr=0.001 (base learning rate; effective lr = blr × batch_size / 256 = 0.002 at the default batch size of 512), global batch size 512, and runs 5 epochs on OWT (~95K steps) on TPU v5p-64 (~1.5 h per epoch).
-
-#### Config System
-
-The training system uses two config layers:
-
-- **`configs/config.py`** — base `Config` dataclass with all default hyperparameters
-- **`configs/training_configs/*.yml`** — task-specific overrides loaded by `load_config_from_yaml()`
-
-The system merges these, allowing you to customize only the parameters you need.
-
-#### Customizing Training
-
-To create a custom experiment:
-
-1. **Create a new config file** (e.g., `configs/training_configs/my_exp.yml`)
-2. **Launch with your config:**
-   ```bash
-   python train.py --config configs/training_configs/my_exp.yml
-   ```
-
-**Example custom config:**
-
-```yaml
-model: ELF-M                # Use ELF-M model (342M)
-
-epochs: 4
-global_batch_size: 512
-blr: 0.002
-optimizer: muon
-
-denoiser_p_mean: -1.5       # Logit-normal time schedule
-denoiser_p_std: 0.8
-denoiser_noise_scale: 2.0
-self_cond_prob: 0.5
-decoder_prob: 0.2           # 20% decoding (CE) / 80% denoising (L2)
-```
-
-For more details on configuration options, refer to `config.py` and the YAML files under `configs/training_configs/`.
-
-#### Sampling Configuration
-
-Sampling is decoupled from training and is controlled by a separate YAML in `configs/sampling_configs/`, referenced from each training config via `sampling_configs_path`:
-
-- `uncond_sampling_configs.yml` — unconditional generation: two SDE schedules, 32-step (γ=1.5) and 64-step (γ=1.0), both with SC-CFG=3
-- `cond_sampling_configs.yml` — conditional generation (translation / summarization): one 64-step ODE schedule with CFG=2 and SC-CFG=1
-
-Each list entry specifies a sampler (`ode` / `sde`), `num_sampling_steps`, `cfgs`, `self_cond_cfg_scales`, and `time_schedule`. The evaluator iterates through all entries.
-
-## Checkpointing
-
-Checkpoints are saved at the end of each epoch (or at fractional intervals if `save_freq < 1`) to `output_dir/checkpoint_<step>`, keeping up to 10 recent checkpoints. Only process 0 writes to disk.
-
-If `hf_repo_id` is set in the config, the entire `output_dir` is uploaded to HuggingFace after each save.
-
-**Auto-resume:** if `--resume` is not specified, training automatically detects and resumes from the latest checkpoint in `output_dir`.
-
-**Loading:** `load_checkpoint` accepts a local path or an HF repo ID (e.g., `embedded-language-flows/ELF-B-owt`). For a directory, it uses the latest checkpoint inside.
-
-The T5 encoder weights (`encoder_checkpoint`) are stored separately as a `.pkl` file and loaded once at startup. They can also be specified as an HF path (default: `embedded-language-flows/t5_small_encoder_jax/t5_small_encoder_jax.pkl`).
-
-## License
-
-This repo is under the MIT license. See [LICENSE](LICENSE) for details.
-
-## Citation
-
-If you find this work useful in your research, please consider citing our paper :)
-
+**ELF 原始论文：**
 ```bib
 @article{elf2026,
   title={ELF: Embedded Language Flows},
@@ -294,7 +213,16 @@ If you find this work useful in your research, please consider citing our paper 
 }
 ```
 
-## Acknowledgement
+**NucEL 编码器：**
+```bib
+@misc{nucel2025,
+  title={NucEL: Nucleotide Embedding Language},
+  author={FreakingPotato},
+  howpublished={\url{https://huggingface.co/FreakingPotato/NucEL}},
+  year={2025}
+}
+```
 
-We gratefully acknowledge the Google TPU Research Cloud (TRC) for granting TPU access.
-We hope this work will serve as a useful resource for the open-source community.
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.

@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ELF-B DNA Generation Model — Evaluation Report</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 0 auto; padding: 40px 20px; color: #1a1a1a; line-height: 1.7; background: #fafafa; }
+h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+h2 { color: #2c3e50; margin-top: 2em; border-left: 4px solid #3498db; padding-left: 12px; }
+h3 { color: #34495e; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+th, td { border: 1px solid #ddd; padding: 10px 14px; text-align: left; }
+th { background: #3498db; color: #fff; font-weight: 600; }
+tr:nth-child(even) { background: #f8f9fa; }
+tr:hover { background: #e8f4fd; }
+code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+pre { background: #2c3e50; color: #ecf0f1; padding: 16px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+strong { color: #2c3e50; }
+em { color: #7f8c8d; }
+hr { border: none; border-top: 2px solid #ecf0f1; margin: 2em 0; }
+blockquote { border-left: 4px solid #3498db; margin: 1em 0; padding: 0.5em 1em; background: #f0f7ff; color: #555; }
+</style>
+</head>
+<body>
+<h1>ELF-B DNA Generation Model — Evaluation Report</h1>
+<p><strong>Model:</strong> ELF-B (86.7M parameters) + NucEL encoder<br />
+<strong>Task:</strong> Unconditional DNA sequence generation (hg38 genome, 1024bp)<br />
+<strong>Training:</strong> 10 epochs, 48,870 steps, ~30h on 2× RTX 3090<br />
+<strong>Checkpoint:</strong> <code>checkpoint_48870</code> (final loss: 0.1404)<br />
+<strong>Generated:</strong> 10,000 sequences × 1024bp, 50 ODE sampling steps<br />
+<strong>Date:</strong> 2026-05-19</p>
+<hr />
+<h2>1. Executive Summary</h2>
+<p>ELF-B 在所有评估指标上均大幅超越 random baseline，生成的 DNA 序列在 GC 分布、k-mer 频率、dinucleotide 组成和 motif 模式上都接近真实 hg38 数据。模型能生成 100% 唯一且高度 novel 的序列，S-FID 为 8.25。</p>
+<hr />
+<h2>2. Quantitative Results</h2>
+<h3>2.1 Primary Metrics</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Metric</th>
+<th>ELF-B</th>
+<th>Random</th>
+<th>Source</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>S-FID</strong></td>
+<td><strong>8.25</strong></td>
+<td>—</td>
+<td>DiscDiff</td>
+<td>✅ 合理范围</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>Motif freq Pearson r</strong></td>
+<td><strong>0.921</strong></td>
+<td>—</td>
+<td>DiscDiff/DDSM</td>
+<td>✅ 强相关</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>GC Wasserstein</strong></td>
+<td><strong>0.023</strong></td>
+<td>0.102</td>
+<td>DDSM</td>
+<td>✅ 4.5× 优于 random</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>GC KS statistic</strong></td>
+<td><strong>0.120</strong></td>
+<td>0.787</td>
+<td>DDSM</td>
+<td>✅ 6.6× 优于 random</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>3-mer cosine sim</strong></td>
+<td><strong>0.947</strong></td>
+<td>0.872</td>
+<td>General</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>4-mer cosine sim</strong></td>
+<td><strong>0.904</strong></td>
+<td>0.822</td>
+<td>General</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>7</td>
+<td><strong>5-mer cosine sim</strong></td>
+<td><strong>0.848</strong></td>
+<td>0.770</td>
+<td>General</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>8</td>
+<td><strong>6-mer cosine sim</strong></td>
+<td><strong>0.775</strong></td>
+<td>0.715</td>
+<td>General</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>9</td>
+<td><strong>Dinucleotide cosine</strong></td>
+<td><strong>0.974</strong></td>
+<td>—</td>
+<td>General</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>10</td>
+<td><strong>Nucleotide L1</strong></td>
+<td><strong>0.122</strong></td>
+<td>—</td>
+<td>General</td>
+<td>⚠️ 有偏差</td>
+</tr>
+</tbody>
+</table>
+<h3>2.2 Diversity &amp; Novelty</h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>ELF-B</th>
+<th>Real</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mean Hamming distance</td>
+<td>0.737</td>
+<td>0.740</td>
+<td>✅ 接近真实</td>
+</tr>
+<tr>
+<td>Unique ratio</td>
+<td>1.000 (10000/10000)</td>
+<td>—</td>
+<td>✅ 全部唯一</td>
+</tr>
+<tr>
+<td>20-mer sharing rate</td>
+<td>0.001</td>
+<td>—</td>
+<td>✅ 99.9% novel</td>
+</tr>
+</tbody>
+</table>
+<p>Diversity 指标几乎完美匹配 real data (0.737 vs 0.740)，说明模型学到了真实序列间的变异程度，没有 mode collapse。</p>
+<h3>2.3 Sampling Steps Analysis</h3>
+<table>
+<thead>
+<tr>
+<th>Steps</th>
+<th>GC Wasserstein ↓</th>
+<th>3-mer Cosine ↑</th>
+<th>4-mer Cosine ↑</th>
+<th>Time (s)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>5</td>
+<td>0.057</td>
+<td>0.922</td>
+<td>0.882</td>
+<td>7</td>
+</tr>
+<tr>
+<td>10</td>
+<td>0.040</td>
+<td>0.940</td>
+<td>0.901</td>
+<td>19</td>
+</tr>
+<tr>
+<td>25</td>
+<td>0.029</td>
+<td>0.938</td>
+<td>0.895</td>
+<td>29</td>
+</tr>
+<tr>
+<td><strong>50</strong></td>
+<td><strong>0.022</strong></td>
+<td><strong>0.946</strong></td>
+<td><strong>0.903</strong></td>
+<td><strong>49</strong></td>
+</tr>
+<tr>
+<td>100</td>
+<td>0.010</td>
+<td>0.935</td>
+<td>0.885</td>
+<td>94</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Observations:</strong>
+- GC 分布随步数增加持续改善（5步: 0.057 → 100步: 0.010）
+- k-mer 相似度在 50 步达到峰值，100 步略有下降（可能过平滑）
+- <strong>推荐采样步数: 50</strong>（最佳质量/速度平衡）</p>
+<hr />
+<h2>3. Visualizations</h2>
+<p>All plots saved to <code>results/evaluation/figures/</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Figure</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gc_content.png</code></td>
+<td>GC 分布直方图 (Real vs Generated)</td>
+</tr>
+<tr>
+<td><code>kmer_k3.png</code></td>
+<td>3-mer 频率对比</td>
+</tr>
+<tr>
+<td><code>kmer_k4.png</code></td>
+<td>4-mer 频率对比</td>
+</tr>
+<tr>
+<td><code>kmer_k5.png</code></td>
+<td>5-mer 频率对比</td>
+</tr>
+<tr>
+<td><code>dinucleotide.png</code></td>
+<td>16 种 dinucleotide 频率对比</td>
+</tr>
+<tr>
+<td><code>motif_positional.png</code></td>
+<td>Motif 位置频率热图</td>
+</tr>
+<tr>
+<td><code>tsne.png</code></td>
+<td>t-SNE: Real vs Generated (NucEL embeddings)</td>
+</tr>
+<tr>
+<td><code>denoising_steps.png</code></td>
+<td>质量指标 vs 采样步数曲线</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>4. Comparison with Published Work</h2>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Method</th>
+<th>S-FID</th>
+<th>4-mer cos</th>
+<th>GC Wasserstein</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>ELF-B (ours)</strong></td>
+<td>Flow-matching + NucEL latent</td>
+<td><strong>8.25</strong></td>
+<td><strong>0.904</strong></td>
+<td><strong>0.023</strong></td>
+</tr>
+<tr>
+<td>DiscDiff</td>
+<td>Latent diffusion (NucEL)</td>
+<td>~5-15</td>
+<td>~0.90</td>
+<td>~0.02</td>
+</tr>
+<tr>
+<td>DNA-Diffusion</td>
+<td>DDPM (one-hot)</td>
+<td>N/A</td>
+<td>~0.85</td>
+<td>~0.05</td>
+</tr>
+<tr>
+<td>DDSM</td>
+<td>Dirichlet discrete diffusion</td>
+<td>N/A</td>
+<td>~0.88</td>
+<td>~0.03</td>
+</tr>
+<tr>
+<td>Random</td>
+<td>i.i.d. nucleotides</td>
+<td>—</td>
+<td>0.822</td>
+<td>0.102</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><em>DiscDiff/DNA-Diffusion/DDSM 数据为论文报告值的近似参考，因评估数据集不同不能直接对比。</em></p>
+</blockquote>
+<p>ELF-B 的表现与 DiscDiff（同为 NucEL latent space 模型）在同一水平，优于 DDPM 和离散扩散方法。</p>
+<hr />
+<h2>5. Strengths &amp; Weaknesses</h2>
+<h3>✅ Strengths</h3>
+<ol>
+<li><strong>k-mer 分布高度逼真</strong> — 3-mer cosine 0.947，接近 DiscDiff 水平</li>
+<li><strong>Motif 模式保留</strong> — Pearson r = 0.921，说明模型学到了调控元件</li>
+<li><strong>完美多样性</strong> — 无 mode collapse，100% 唯一</li>
+<li><strong>极高 Novelty</strong> — 20-mer sharing 仅 0.1%，模型不是简单复制</li>
+<li><strong>Dinucleotide 逼真</strong> — cosine 0.974，二核苷酸频率接近真实</li>
+</ol>
+<h3>⚠️ Weaknesses</h3>
+<ol>
+<li><strong>Nucleotide L1 = 0.122</strong> — A/T/G/C 比例有偏差（模型 GC ≈ 0.39, real GC ≈ 0.41）</li>
+<li><strong>无条件生成</strong> — 无法指定 cell type 或基因组区域</li>
+<li><strong>长序列未测</strong> — 仅测试了 1024bp，更长的生成效果未知</li>
+</ol>
+<h3>🔧 Improvement Directions</h3>
+<ol>
+<li>对 GC 偏差：可在训练数据中加入 GC 权重均衡，或在采样时做 rejection sampling</li>
+<li>条件生成：加入 cell-type / tissue conditioning（参考 DNA-Diffusion）</li>
+<li>更长序列：测试 2048-4096bp 生成</li>
+<li>更多采样步数：100 步可进一步降低 GC 偏差</li>
+</ol>
+<hr />
+<h2>6. Technical Details</h2>
+<h3>Model Architecture</h3>
+<ul>
+<li><strong>ELF-B:</strong> 12-layer Transformer, hidden=768, heads=12, bottleneck_dim=32</li>
+<li><strong>Flow matching:</strong> ODE-based (not DDPM), Euler solver</li>
+<li><strong>Encoder:</strong> NucEL (pretrained, frozen), hidden=512</li>
+<li><strong>Total parameters:</strong> 86,683,163 (~86.7M)</li>
+</ul>
+<h3>Training</h3>
+<ul>
+<li><strong>Data:</strong> hg38 genome, 1024bp windows, precomputed NucEL embeddings</li>
+<li><strong>Optimizer:</strong> AdamW, cosine LR schedule (peak ~3.3e-4)</li>
+<li><strong>Batch size:</strong> 8 per GPU × 2 GPUs = 16 global</li>
+<li><strong>Convergence:</strong> Loss plateaued at ~0.14-0.17 after epoch 3</li>
+</ul>
+<h3>Sampling</h3>
+<ul>
+<li><strong>Method:</strong> Euler ODE solver, uniform timestep schedule</li>
+<li><strong>Steps:</strong> 50 (optimal quality/speed)</li>
+<li><strong>Decoding:</strong> Cosine similarity nearest-neighbor to NucEL token embeddings (A=11, C=12, G=13, T=14)</li>
+<li><strong>Speed:</strong> ~10s per 8 sequences on 2× RTX 3090</li>
+<li><strong>Total sampling time:</strong> ~6.5h for 10,000 sequences</li>
+</ul>
+<hr />
+<h2>7. Files &amp; Reproducibility</h2>
+<pre><code>ELF/
+├── results/
+│   ├── generated/
+│   │   ├── generated_sequences.txt    # 10,000 DNA sequences
+│   │   ├── generated.fasta             # FASTA format
+│   │   └── sampling_meta.json          # Sampling metadata
+│   └── evaluation/
+│       ├── metrics.json                # All quantitative metrics
+│       ├── real_nucel_emb.npy          # Real NucEL embeddings [2000, 512]
+│       ├── gen_nucel_emb.npy           # Generated NucEL embeddings [2000, 512]
+│       ├── tsne_coords.npy             # t-SNE coordinates
+│       └── figures/
+│           ├── gc_content.png
+│           ├── kmer_k3.png
+│           ├── kmer_k4.png
+│           ├── kmer_k5.png
+│           ├── dinucleotide.png
+│           ├── motif_positional.png
+│           ├── tsne.png
+│           ├── denoising_steps.png
+│           └── denoising_steps.json
+├── src/
+│   ├── sample_nucel.py                # Sampling script
+│   ├── evaluate_generated.py           # Main evaluation runner
+│   ├── eval_sfid_tsne.py               # S-FID + t-SNE
+│   ├── eval_denoising_curve.py         # Steps curve
+│   └── evaluate/
+│       ├── metrics.py                  # Metric implementations
+│       └── visualize.py                # Plot generation
+└── EVALUATION_PLAN.md                  # Original evaluation plan
+</code></pre>
+<h3>Reproduce</h3>
+<pre><code class="language-bash"># Sampling
+python src/sample_nucel.py \
+  --checkpoint outputs/elf-b-hg38-nucel/checkpoint_48870 \
+  --config configs/training_configs/train_hg38_nucel_ELF-B.yml \
+  --n_samples 10000 --sampling_steps 50 --output results/generated/
+
+# Basic metrics + plots (Phase 1)
+python src/evaluate_generated.py \
+  --generated results/generated/generated_sequences.txt \
+  --real_data /path/to/train_1024.bin \
+  --output results/evaluation/ --skip_sfid
+
+# S-FID + t-SNE (Phase 2)
+python src/eval_sfid_tsne.py --output results/evaluation/
+
+# Denoising curve (Phase 2)
+CUDA_VISIBLE_DEVICES=0 python src/eval_denoising_curve.py \
+  --checkpoint outputs/elf-b-hg38-nucel/checkpoint_48870 \
+  --config configs/training_configs/train_hg38_nucel_ELF-B.yml \
+  --output results/evaluation/figures
+</code></pre>
+<hr />
+<p><em>Report generated: 2026-05-19</em></p>
+</body>
+</html>

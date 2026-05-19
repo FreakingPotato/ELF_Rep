@@ -1,0 +1,21 @@
+# Data & weights
+data/
+outputs/
+results/
+*.bin
+*.npy
+*.fasta
+*.safetensors
+*.ckpt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Misc
+=4.50.0
+get-pip.py
+bench_speed.py
+requirements_cuda.txt

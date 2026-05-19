@@ -87,6 +87,8 @@ class Config:
     adam_b1: float = 0.9
     adam_b2: float = 0.95
     grad_accum_steps: int = 1  # Gradient accumulation steps (optimizer updates every K mini-batches)
+    use_bf16: bool = False  # Mixed precision training with bfloat16
+    use_fp16: bool = False  # Mixed precision training with float16
 
     # EMA
     ema_decay1: float = 0.9999
