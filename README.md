@@ -8,6 +8,23 @@
 
 ---
 
+## ⚠️ 与原始 ELF-B 的差异
+
+本实现是 ELF-B 的 **DNA 领域变体**，与论文中的 ELF-B (105M 参数) 存在以下差异：
+
+| 参数 | Paper ELF-B | 本实现 | 说明 |
+|------|-------------|--------|------|
+| Parameters | 105M | **86.7M** | 更小的 bottleneck |
+| `bottleneck_dim` | 128 | **32** | Text projection 瓶颈层更小 |
+| `self_cond_prob` | 0.5 | **0.0** | 未使用 self-conditioning |
+| `decoder_prob` | 0.5 | **0.0** | 纯 L2 denoising，无 CE decoder head |
+| `num_time_tokens` | 4 | **2** | 更少的时间步 prefix tokens |
+| Optimizer | Muon | **AdamW** | 不同优化器 |
+
+这些简化是为了适配 DNA 序列的 embedding space 特性（512 维 vs T5 的 768 维）和 GPU 显存限制。
+
+---
+
 ## 📋 Overview
 
 本项目将 ELF（连续 embedding 空间的 flow-matching 扩散模型）应用于 **hg38 人类基因组 DNA 序列生成**：
@@ -15,7 +32,7 @@
 - **编码器**: NucEL（预训练 DNA 语言模型，512 维 embedding）
 - **架构**: ELF-B（12 层 Transformer，86.7M 参数）
 - **训练数据**: hg38 基因组，1024bp 窗口，预计算 NucEL embeddings
-- **训练**: 10 epochs，48,870 steps，~30h (2×RTX 3090)
+- **训练**: 10 epochs，48,870 steps，~30h (2×RTX 3090)，global batch size = 8
 - **采样**: Euler ODE solver，50 步
 
 ## 🧬 Evaluation Results
@@ -112,6 +129,27 @@ CUDA_VISIBLE_DEVICES=0 python src/eval_denoising_curve.py \
   --checkpoint outputs/elf-b-hg38-nucel/checkpoint_48870 \
   --config configs/training_configs/train_hg38_nucel_ELF-B.yml \
   --output results/evaluation/figures
+```
+
+### MDLM Baseline 对比
+
+```bash
+# 构建 NucEL embedding matrix（采样和评估需要）
+python scripts/build_nucel_emb_matrix.py
+
+# 训练 MDLM baseline (~87M params, 同等计算预算)
+python scripts/train_mdlm_hg38.py \
+  --data /path/to/train_1024.bin \
+  --epochs 10 --batch_size 32 --lr 1e-4 \
+  --output outputs/mdlm-hg38/
+
+# DNA PPL 评估（NucEL MLM pseudo-perplexity）
+python scripts/eval_dna_ppl.py \
+  --sequences results/generated/generated_sequences.txt \
+  --sequences outputs/mdlm-hg38/generated_sequences.txt \
+  --labels ELF-B MDLM \
+  --real_data /path/to/train_1024.bin \
+  --output results/evaluation/dna_ppl.json
 ```
 
 ---
